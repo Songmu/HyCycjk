@@ -290,7 +290,7 @@ sub post_param{
                 if ( my ($filename, $content_type ) = 
                         $key_data =~ /filename="(.*?)".*Content-Type: ([^\r\n]+)/ms 
                 ){
-                    my ( $ext ) = $filename =~ /\.[^.]+$/;
+                    my ( $ext ) = $filename =~ /\.([^.]+)$/;
                     $ext ||= '';
                     $_POST->{$key} = {
                         name => $filename,
