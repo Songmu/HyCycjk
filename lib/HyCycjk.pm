@@ -10,7 +10,8 @@ use Data::Dumper;
 our $VERSION = '0.01';
 
 # TODO
-# プラグイン機構(セッション) pre_request(コントローラー分岐前の処理) 設定値
+# プラグイン機構(セッション) pre_request(コントローラー分岐前の処理) 設定値 ファイルDL機能
+# メール機能？
 
 our $MAX_POST_BODY_SIZE = 10000000;
 our $DEBUG              = 1;
@@ -25,6 +26,14 @@ our $MEDIA_MIMETYPES = +{
     gif     => 'image/gif',
     png     => 'image/png',
     svg     => 'image/svg+xml',
+};
+
+our $STATIC_MIMETYPES = {
+    css     => 'text/css',
+    js      => 'text/javascript',
+    html    => 'text/html',
+    xml     => 'text/xml',
+    txt     => 'text/plain',
 };
 
 our $TEMPLATE_MIMETYPES = +{
@@ -163,8 +172,12 @@ sub dispatch {
         $action =~ s!^/+!!  if( $action );
         
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
-        if ( $action =~ /\.$media_exts$/ ){ #画像だったら画像を呼び出す。他の静的ファイル対応も必要
+        my $static_exts = join '|', map{quotemeta} keys %{$STATIC_MIMETYPES};
+        if ( $action =~ /\.$media_exts$/ && -e $STATIC_FILE_PATH.$action ){ #静的ファイル対応
             $response = view_image( $STATIC_FILE_PATH.$action );
+        }
+        elsif ( $action =~ /\.$static_exts$/ && -e $STATIC_FILE_PATH.$action ){
+            $response = view_static( $STATIC_FILE_PATH.$action );
         }
         elsif (-e $CONTROLLER_PATH.$action.'.pl' ){
             eval{
@@ -457,20 +470,24 @@ sub view_image {
     my $file = shift;
     my ($ext) = $file =~ /\.([^\.]+)$/;
     my $mime_type = $MEDIA_MIMETYPES->{$ext};
-    my ( $data, $size );
-    local $@;
-    eval {
-        ( $data, $size ) = _read_binary($file);
-    };
-    if ( $@ ){
-        return ref($NOT_FOUND_CODE) eq 'CODE'
-            ? $NOT_FOUND_CODE->()
-            : $NOT_FOUND_CODE;
-    }
+    my ( $data, $size ) = _read_binary($file);
     +{  headers => +{ 
             'Content-Type' => $mime_type,
             'Accept-Ranges' => 'bytes',
             'Content-Length' => $size,
+        },
+        body    => $data ,
+    }
+}
+
+sub view_static {
+    my $file = shift;
+    my ($ext) = $file =~ /\.([^\.]+)$/;
+    my $mime_type = $MEDIA_MIMETYPES->{$ext};
+    my $data = _read_file($file);
+    +{  headers => +{ 
+            'Content-Type' => $mime_type,
+            'Content-Length' => length($data),
         },
         body    => $data ,
     }
