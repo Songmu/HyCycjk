@@ -26,6 +26,9 @@ our $MEDIA_MIMETYPES = +{
     gif     => 'image/gif',
     png     => 'image/png',
     svg     => 'image/svg+xml',
+    pdf     => 'application/pdf',
+    swf     => 'application/x-shockwave-flash',
+    ico     => 'image/vnd.microsoft.icon',
 };
 
 our $STATIC_MIMETYPES = {
@@ -170,6 +173,7 @@ sub dispatch {
     eval { #main process
         my $action = lc( $ENV{PATH_INFO} || '' );
         $action =~ s!^/+!!  if( $action );
+        die 'Bad Request' if $action =~ /\.\./; #for directory traversal
         
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
         my $static_exts = join '|', map{quotemeta} keys %{$STATIC_MIMETYPES};
@@ -180,15 +184,12 @@ sub dispatch {
             $response = view_static( $STATIC_FILE_PATH.$action );
         }
         elsif (-e $CONTROLLER_PATH.$action.'.pl' ){
-            eval{
-                $response = require $CONTROLLER_PATH.$action.'.pl';
-                $response = $response->() if ref $response eq 'CODE';
-            };
-            die $@ if $@ ;
+            $response = require $CONTROLLER_PATH.$action.'.pl';
+            $response = $response->() if ref $response eq 'CODE';
         }
         else{
             $action =~ s!/!_!g  if( $action );
-            $action = '' unless $action =~ /^[a-z0-9_]*$/;
+            $action = '' unless $action =~ /^[a-z0-9_.]*$/;
             $action ||= 'index';
             
             my $method_prefix = 
