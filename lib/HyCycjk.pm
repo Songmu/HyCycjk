@@ -97,7 +97,7 @@ sub import {
     utf8->import;
 }
 
-sub _read_file {
+sub read_file {
     my $file = shift;
     open my $fh, '<', $file or die $file . ': ' . $!;
     do { local $/; <$fh> };
@@ -177,10 +177,10 @@ sub dispatch {
         
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
         my $static_exts = join '|', map{quotemeta} keys %{$STATIC_MIMETYPES};
-        if ( $action =~ /\.$media_exts$/ && -e $STATIC_FILE_PATH.$action ){ #静的ファイル対応
+        if ( $action =~ /\.(?:$media_exts)$/ && -e $STATIC_FILE_PATH.$action ){ #静的ファイル対応
             $response = view_image( $STATIC_FILE_PATH.$action );
         }
-        elsif ( $action =~ /\.$static_exts$/ && -e $STATIC_FILE_PATH.$action ){
+        elsif ( $action =~ /\.(?:$static_exts)$/ && -e $STATIC_FILE_PATH.$action ){
             $response = view_static( $STATIC_FILE_PATH.$action );
         }
         elsif (-e $CONTROLLER_PATH.$action.'.pl' ){
@@ -314,7 +314,17 @@ sub post_param{
                     };
                 }
                 else{
-                    $_POST->{$key} = $val;
+                    if ( $_POST->{$key} ){
+                        if ( ref $_POST->{$key} eq 'ARRAY' ){
+                            $_POST->{$key} = [ @{$_POST->{$key}}, $val];
+                        }
+                        else{
+                            $_POST->{$key} = [$_POST->{$key}, $val];
+                        }
+                    }
+                    else{
+                        $_POST->{$key} = $val;
+                    }
                 }
             }
         }
@@ -485,7 +495,7 @@ sub view_static {
     my $file = shift;
     my ($ext) = $file =~ /\.([^\.]+)$/;
     my $mime_type = $MEDIA_MIMETYPES->{$ext};
-    my $data = _read_file($file);
+    my $data = read_file($file);
     +{  headers => +{ 
             'Content-Type' => $mime_type,
             'Content-Length' => length($data),
