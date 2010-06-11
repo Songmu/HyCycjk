@@ -20,7 +20,7 @@ our $NOT_FOUND_CODE     = +{
     body    => 'Not Found',
 };
 our $CURRENT_CLASS = '';
-
+our %DISPATCH_RULES;
 our $MEDIA_MIMETYPES = +{
     jpg     => 'image/jpeg',
     gif     => 'image/gif',
@@ -88,7 +88,7 @@ sub import {
 
     # functions export
     no strict 'refs';
-    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request /)
+    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules /)
     {
         *{ $caller . '::' . $name } = \&{$name};
     }
@@ -175,6 +175,9 @@ sub dispatch {
         $action =~ s!^/+!!  if( $action );
         die 'Bad Request' if $action =~ /\.\./; #for directory traversal
         
+        $action = _camelize( $action ); #アンスコをキャメライズ
+        ( $action, my @snippets ) = _get_ready_controller( $action );
+        
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
         my $static_exts = join '|', map{quotemeta} keys %{$STATIC_MIMETYPES};
         if ( $action =~ /\.(?:$media_exts)$/ && -e $STATIC_FILE_PATH.$action ){ #静的ファイル対応
@@ -184,24 +187,25 @@ sub dispatch {
             $response = view_static( $STATIC_FILE_PATH.$action );
         }
         elsif (-e $CONTROLLER_PATH.$action.'.pl' ){
-            $response = require $CONTROLLER_PATH.$action.'.pl';
-            $response = $response->() if ref $response eq 'CODE';
+            $response = require "$CONTROLLER_PATH$action.pl"; #@snippetsを渡したい
+            $response = $response->(@snippets) if ref $response eq 'CODE';
         }
         else{
             $action =~ s!/!_!g  if( $action );
-            $action = '' unless $action =~ /^[a-z0-9_.]*$/;
+            #ドットを指定しないと、静的ファイルが見つからなかった場合、indexに飛んでしまう(現状の苦肉の策)
+            $action = '' unless $action =~ /^[a-zA-Z0-9_.]*$/;
             $action ||= 'index';
             
             my $method_prefix = 
                 $ENV{REQUEST_METHOD} eq "POST" ? 'dopost_' : 'do_';
             my $func = $method_prefix . $action;
             if ( my $code = $CURRENT_CLASS->can($func) ) {
-                $response = $code->();
+                $response = $code->(@snippets);
             }
             else{
                 eval {
                     no strict 'refs';
-                    $response = "$CURRENT_CLASS\::view"->( $action );
+                    $response = "$CURRENT_CLASS\::view"->( $action, @snippets );
                 };
                 if ( $@ ){
                     die $@ unless $@->{'message'} =~
@@ -716,6 +720,29 @@ sub template_builder {
 
 sub run(&){
     $_[0];
+}
+
+sub _get_ready_controller {
+    my $action = shift;
+    local $1;
+    for my $reg ( keys %DISPATCH_RULES ){
+        if ( my @snippets = $action =~ $reg ){
+            @snippets = () unless defined $1;
+            return ( $DISPATCH_RULES{$reg}, @snippets );
+        }
+    }
+    return $action;
+}
+
+sub _camelize {
+    return $_[0] if $_[0] !~ /_/;
+    my $str = join '', map { ucfirst } split /_/ , shift;
+    $str = lcfirst $str;
+    $str;
+}
+
+sub dispatch_rules {
+    %DISPATCH_RULES = @_;
 }
 
 sub logging{
