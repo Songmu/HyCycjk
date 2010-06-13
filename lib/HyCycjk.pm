@@ -187,7 +187,7 @@ sub dispatch {
             $response = view_static( $STATIC_FILE_PATH.$action );
         }
         elsif (-e $CONTROLLER_PATH.$action.'.pl' ){
-            $response = require "$CONTROLLER_PATH$action.pl"; #@snippetsを渡したい
+            $response = require "$CONTROLLER_PATH$action.pl"; #ここでも@snippetsを渡す？
             $response = $response->(@snippets) if ref $response eq 'CODE';
         }
         else{
@@ -257,8 +257,6 @@ sub dispatch {
     $headers{'Content-Length'} ||= length(Encode::encode_utf8($body));
     $headers{'Content-Type'}  ||= 'text/html; charset=utf-8';
     
-    #logging(Dumper $response);
-    # multipartをPOSTしたときにcontent-lengthが狂う？ 2byte長くクライアントに送られる？
     binmode STDOUT;
     # build headers
     while ( my ( $name, $values ) = each %headers ) {
@@ -318,6 +316,7 @@ sub post_param{
                     };
                 }
                 else{
+                    $val = Encode::decode_utf8($val);
                     if ( $_POST->{$key} ){
                         if ( ref $_POST->{$key} eq 'ARRAY' ){
                             $_POST->{$key} = [ @{$_POST->{$key}}, $val];
@@ -350,7 +349,6 @@ sub post_keys {
     post_param() unless $_POST;
     keys %$_POST;
 }
-
 
 sub _parse_query{ #store list reference if existing multiple item
     my $input = shift;
@@ -513,8 +511,8 @@ sub render {
     my ( undef, $code ) = template_builder($file);
     die 'template file not found (' . $file . ')' . $code unless $code;
     my $result = ( eval $code )->(@_);
-    $result = Encode::decode_utf8($result); #set flag. I don't know why unflagged defaultly when returning.
-    return $result;
+    $result = Encode::decode_utf8($result);
+    $result;
 }
 
 sub view_template {
@@ -731,14 +729,13 @@ sub _get_ready_controller {
             return ( $DISPATCH_RULES{$reg}, @snippets );
         }
     }
-    return $action;
+    $action;
 }
 
 sub _camelize {
     return $_[0] if $_[0] !~ /_/;
     my $str = join '', map { ucfirst } split /_/ , shift;
-    $str = lcfirst $str;
-    $str;
+    lcfirst $str;
 }
 
 sub dispatch_rules {
