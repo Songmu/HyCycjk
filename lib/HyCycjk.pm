@@ -10,8 +10,7 @@ require Encode;
 our $VERSION = '0.01';
 
 # TODO
-# プラグイン機構(セッション) pre_request(コントローラー分岐前の処理) 設定値 ファイルDL機能
-# メール機能？
+# プラグイン機構 pre_request(コントローラー分岐前の処理) 設定値 ファイルDL機能
 
 our $MAX_POST_BODY_SIZE = 10000000;
 our $DEBUG              = 1;
@@ -181,7 +180,6 @@ sub dispatch {
         $action =~ s!^/+!!  if( $action );
         die 'Bad Request' if $action =~ /\.\./; #for directory traversal
 
-        $action = _camelize( $action ); #アンスコをキャメライズ
         ( $action, my @snippets ) = _get_ready_controller( $action );
 
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
@@ -197,6 +195,7 @@ sub dispatch {
             $response = $response->(@snippets) if ref $response eq 'CODE';
         }
         else{
+            $action = _camelize( $action );
             $action =~ s!/!_!g  if( $action );
             #ドットを指定しないと、静的ファイルが見つからなかった場合、indexに飛んでしまう(現状の苦肉の策)
             $action = '' unless $action =~ /^[a-zA-Z0-9_.]*$/;
@@ -211,7 +210,7 @@ sub dispatch {
             else{
                 eval {
                     no strict 'refs';
-                    $response = "$CURRENT_CLASS\::view"->( $action, @snippets );
+                    $response = "$CURRENT_CLASS\::view"->( _uncamelize($action), @snippets );
                 };
                 if ( $@ ){
                     die $@ unless $@->{'message'} =~
@@ -748,6 +747,14 @@ sub _camelize {
 
 sub dispatch_rules {
     %DISPATCH_RULES = @_;
+}
+
+sub _uncamelize {
+    return $_[0] if $_[0] !~ /[_A-Z]/;
+    my $str = shift;
+    $str =~ s!_!/!g;
+    $str =~ s!([A-Z])!'_'.lc($1)!eg;
+    $str;
 }
 
 #sub logging{
