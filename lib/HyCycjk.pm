@@ -5,7 +5,7 @@ use utf8;
 
 require Encode;
 
-use Data::Dumper;
+#use Data::Dumper;
 
 our $VERSION = '0.01';
 
@@ -62,11 +62,12 @@ our $TEMPLATE_PARAMS = +{
 };
 our $STATIC_FILE_PATH = '';
 our $CONTROLLER_PATH = '';
+our $DATA_PATH = '';
 
 my $CRLF  = "\r\n";
 my $_GET = undef;
 my $_POST = undef;
-our $_SESSION = undef;
+my $_SESSION = undef;
 
 sub import {
     my ( $class, %args ) = @_;
@@ -86,19 +87,16 @@ sub import {
             $TEMPLATE_PARAMS->{$key} = $val;
         }
     }
-
     # functions export
     no strict 'refs';
-    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules $_SESSION/)
+    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules/)
     {
         *{ $caller . '::' . $name } = \&{$name};
     }
     for my $meth (qw/get set keys remove as_hashref expire regenerate_session_id session_id/) {
-        *{$caller."::session_${meth}"} = sub {
-            $_SESSION->$meth(@_);
-        };
+        *{ __PACKAGE__ . '::'. "session_$meth"} = \&{"session_$meth"};
     }
-    
+
     strict->import;
     warnings->import;
     utf8->import;
@@ -125,10 +123,10 @@ sub dispatch {
     # copied by MENTA
     local $SIG{__DIE__} = sub { #error handler
         my $msg = shift;
-        
+
         my $i = 0;
         my @trace;
-        
+
         if ( ref $msg eq 'HASH' ){
             @trace = @{$msg->{trace}};
             $msg = $msg->{message};
@@ -182,10 +180,10 @@ sub dispatch {
         my $action = lc( $ENV{PATH_INFO} || '' );
         $action =~ s!^/+!!  if( $action );
         die 'Bad Request' if $action =~ /\.\./; #for directory traversal
-        
+
         $action = _camelize( $action ); #アンスコをキャメライズ
         ( $action, my @snippets ) = _get_ready_controller( $action );
-        
+
         my $media_exts = join '|', map{quotemeta} keys %{$MEDIA_MIMETYPES};
         my $static_exts = join '|', map{quotemeta} keys %{$STATIC_MIMETYPES};
         if ( $action =~ /\.(?:$media_exts)$/ && -e $STATIC_FILE_PATH.$action ){ #静的ファイル対応
@@ -203,7 +201,7 @@ sub dispatch {
             #ドットを指定しないと、静的ファイルが見つからなかった場合、indexに飛んでしまう(現状の苦肉の策)
             $action = '' unless $action =~ /^[a-zA-Z0-9_.]*$/;
             $action ||= 'index';
-            
+
             my $method_prefix = 
                 $ENV{REQUEST_METHOD} eq "POST" ? 'dopost_' : 'do_';
             my $func = $method_prefix . $action;
@@ -258,7 +256,7 @@ sub dispatch {
         };
         die $@ unless $response;
     }
-    
+
     $response ||= +{};
     my %headers = %{ $response->{headers} || +{} };
     my $body = $response->{body} || '';
@@ -266,7 +264,7 @@ sub dispatch {
     $headers{'Content-Type'}  ||= 'text/html; charset=utf-8';
     $headers{'Set-Cookie'} = $_SESSION->cookie_str if $_SESSION->is_fresh;
     $_SESSION->finalize;
-    
+
     binmode STDOUT;
     # build headers
     while ( my ( $name, $values ) = each %headers ) {
@@ -752,258 +750,265 @@ sub dispatch_rules {
     %DISPATCH_RULES = @_;
 }
 
-sub logging{
-    my $msg = shift;
-    open my $fh,'>>','loglog.log' or return;
-    binmode $fh;
-    print $fh $msg."\n";
-}
+#sub logging{
+#    my $msg = shift;
+#    open my $fh,'>>','loglog.log' or return;
+#    binmode $fh;
+#    print $fh $msg."\n";
+#}
 
-BEGIN{
-    package HyCycjk::Session;
-    use Fcntl;
-    use Storable;
-    
-    our $COOKIE_CLASS = 'CGI::Cookie';
-    {
-        no strict 'refs';
-        # ro_accessors
-        for my $meth ( qw/sid_length permissive name path domain expires file secure/ ){
-            *{__PACKAGE__."::$meth"} = sub {
-                shift->{$meth};
-            }
-        }
-        # rw_accessors
-        for my $meth ( qw/session_id _data is_changed is_fresh/ ){
-            *{__PACKAGE__."::$meth"} = sub {
-                my $self = shift;
-                $self->{$meth} = shift if @_;
-                $self->{$meth};
-            }
-        }
-    }
-
-    sub new {
-        my $class = shift;
-        my %args = ref($_[0]) ? %{$_[0]} : @_;
-        
-        # set default values
-        $args{_data}      ||= {};
-        $args{is_changed} ||= 0;
-        $args{is_fresh}   ||= 0;
-        $args{sid_length} ||= 32;
-        $args{file}       ||= 'session';
-        
-        $args{permissive} ||= 0;
-        
-        $args{name}       ||= 'http_session_id';
-        $args{path}       ||= '/';
-        $args{domain}     ||= '';
-        $args{expires}    ||= '';
-        $args{secure}     ||= '';
-        
-        my $self = bless {%args}, $class;
-        $self->_load_session();
-        
-        $self;
-    }
-
-    sub _load_session {
-        my $self = shift;
-
-        my $session_id = $self->get_session_id;
-        if ( $session_id ) {
-            my $data = $self->select($session_id);
-            if ($data) {
-                $self->session_id( $session_id );
-                $self->_data($data);
-            } else {
-                if ($self->permissive) {
-                    $self->session_id( $session_id );
-                    $self->is_fresh(1);
-                } else {
-                    # session was expired? or session fixation?
-                    # regen session id.
-                    $self->session_id( $self->_generate_session_id() );
-                    $self->is_fresh(1);
-                }
-            }
-        } else {
-            # no sid; generate it
-            $self->session_id( $self->_generate_session_id() );
-            $self->is_fresh(1);
-        }
-    }
-
-    sub _generate_session_id {
-        my $self = shift;
-        $self->generate_id($self->sid_length);
-    }
-    
-    sub dbm {
-        my $self = shift;
-        $self->{dbm} ||= do {
-            my %hash;
-            eval "use SDBM_File";
-            tie %hash, 'SDBM_File', $self->file, O_CREAT | O_RDWR, oct("600");
-            \%hash;
+{ no strict 'refs';
+    for my $meth (qw/get set keys remove as_hashref expire regenerate_session_id session_id/) {
+        *{ __PACKAGE__ . '::'. "session_$meth"} = sub {
+            $_SESSION->$meth(@_);
         };
     }
+}
 
-    sub select {
-        my ( $self, $key ) = @_;
-        Storable::thaw $self->dbm->{$key};
+package HyCycjk::Session;
+use Fcntl;
+use Storable;
+
+our $COOKIE_CLASS = 'CGI::Cookie';
+{
+    no strict 'refs';
+    # ro_accessors
+    for my $meth ( qw/sid_length permissive name path domain expires file secure/ ){
+        *{__PACKAGE__."::$meth"} = sub {
+            shift->{$meth};
+        }
     }
-
-    sub insert {
-        my ( $self, $key, $value ) = @_;
-        $self->dbm->{$key} = Storable::freeze $value;
+    # rw_accessors
+    for my $meth ( qw/session_id _data is_changed is_fresh/ ){
+        *{__PACKAGE__."::$meth"} = sub {
+            my $self = shift;
+            $self->{$meth} = shift if @_;
+            $self->{$meth};
+        }
     }
-    sub update { shift->insert(@_) }
+}
 
-    sub delete {
-        my ( $self, $key ) = @_;
-        delete $self->dbm->{$key};
-    }
+sub new {
+    my $class = shift;
+    my %args = ref($_[0]) ? %{$_[0]} : @_;
 
-    sub cleanup { Carp::croak "This storage doesn't support cleanup" }
+    # set default values
+    $args{_data}      ||= {};
+    $args{is_changed} ||= 0;
+    $args{is_fresh}   ||= 0;
+    $args{sid_length} ||= 32;
+    $args{file}       ||= 'data/session';
 
-    sub finalize {
-        my ($self, ) = @_;
-        if ($self->is_fresh) {
-            $self->insert( $self->session_id, $self->_data );
+    $args{permissive} ||= 0;
+
+    $args{name}       ||= 'http_session_id';
+    $args{path}       ||= '/';
+    $args{domain}     ||= '';
+    $args{expires}    ||= '';
+    $args{secure}     ||= '';
+
+    my $self = bless {%args}, $class;
+    $self->_load_session();
+
+    $self;
+}
+
+sub _load_session {
+    my $self = shift;
+
+    my $session_id = $self->get_session_id;
+    if ( $session_id ) {
+        my $data = $self->select($session_id);
+        if ($data) {
+            $self->session_id( $session_id );
+            $self->_data($data);
         } else {
-            if ($self->is_changed) {
-                $self->update( $self->session_id, $self->_data );
+            if ($self->permissive) {
+                $self->session_id( $session_id );
+                $self->is_fresh(1);
+            } else {
+                # session was expired? or session fixation?
+                # regen session id.
+                $self->session_id( $self->_generate_session_id() );
+                $self->is_fresh(1);
             }
         }
-        delete $self->{$_} for keys %$self;
-        bless $self, 'HyCycjk::Session::Finalized';
-    }
-    {
-        my $required = 0;
-        sub _cookie_class {
-            my $class = shift;
-            unless ($required) {
-                (my $klass = $COOKIE_CLASS) =~ s!::!/!g;
-                $klass .= ".pm";
-                require $klass;
-                $required++;
-            }
-            return $COOKIE_CLASS
-        }
-    }
-
-    sub cookie_str {
-        my $self = shift;
-        my $cookie = _cookie_class()->new(
-            sub {
-                my %options = (
-                    -name   => $self->name,
-                    -value  => $self->session_id,
-                    -path   => $self->path,
-                );
-                $options{'-domain'} = $self->domain if $self->domain;
-                $options{'-expires'} = $self->expires if $self->expires;
-                $options{'-secure'} = $self->secure if $self->secure;
-                %options;
-            }->()
-        );
-        return $cookie->as_string;
-    }
-
-    sub get_session_id {
-        my ($self) = @_;
-        my $cookie_header = $ENV{HTTP_COOKIE};
-        return unless $cookie_header;
-
-        my %jar    = _cookie_class()->parse($cookie_header);
-        my $cookie = $jar{$self->name};
-        return $cookie ? $cookie->value : undef;
-    }
-
-    {
-        my $digest_func = '';
-        sub generate_id {
-            unless ( $digest_func ) {
-                no strict 'refs';
-                require Time::HiRes;
-                eval {
-                    require Digest::SHA;
-                    $digest_func = *{Digest::SHA::sha256_hex};
-                };
-                if( $@ ){
-                    $@ = undef;
-                    require Digest::MD5;
-                    $digest_func = *{Digest::MD5::md5_hex};
-                }
-            }
-            my ($class, $sid_length) = @_;
-            my $unique = $ENV{UNIQUE_ID} || ( [] . rand() );
-            return substr( $digest_func->( Time::HiRes::gettimeofday() . $unique ), 0, $sid_length );
-        }
-    }
-    sub keys {
-        my $self = shift;
-        return keys %{ $self->_data };
-    }
-
-    sub get {
-        my ($self, $key) = @_;
-        $self->_data->{$key};
-    }
-
-    sub set {
-        my ($self, $key, $val) = @_;
-        $self->is_changed(1);
-        $self->_data->{$key} = $val;
-    }
-
-    sub remove {
-        my ( $self, $key ) = @_;
-        $self->is_changed(1);
-        delete $self->_data->{$key};
-    }
-
-    sub as_hashref {
-        my $self = shift;
-        return { %{ $self->_data } }; # shallow copy
-    }
-
-    sub expire {
-        my $self = shift;
-        $self->delete($self->session_id);
-
-        # XXX tricky bit to unlock
-        delete $self->{$_} for qw(is_fresh is_changed);
-        $self->finalize;
-
-        # rebless to null class
-        bless $self, 'HyCycjk::Session::Expired';
-    }
-
-    sub regenerate_session_id {
-        my ($self, $delete_old) = @_;
-        $self->_data( { %{ $self->_data } } );
-
-        if ($delete_old) {
-            my $oldsid = $self->session_id;
-            $self->delete($oldsid);
-        }
-        my $session_id = $self->_generate_session_id();
-        $self->session_id( $session_id );
+    } else {
+        # no sid; generate it
+        $self->session_id( $self->_generate_session_id() );
         $self->is_fresh(1);
     }
-
-    package HyCycjk::Session::Finalized;
-    sub is_fresh { 0 }
-    sub AUTOLOAD { }
-
-    package HyCycjk::Session::Expired;
-    sub is_fresh { 0 }
-    sub AUTOLOAD { }
-
 }
+
+sub _generate_session_id {
+    my $self = shift;
+    $self->generate_id($self->sid_length);
+}
+
+sub dbm {
+    my $self = shift;
+    $self->{dbm} ||= do {
+        my %hash;
+        eval "use SDBM_File";
+        tie %hash, 'SDBM_File', $self->file, O_CREAT | O_RDWR, oct("600");
+        \%hash;
+    };
+}
+
+sub select {
+    my ( $self, $key ) = @_;
+    Storable::thaw $self->dbm->{$key};
+}
+
+sub insert {
+    my ( $self, $key, $value ) = @_;
+    $self->dbm->{$key} = Storable::freeze $value;
+}
+sub update { shift->insert(@_) }
+
+sub delete {
+    my ( $self, $key ) = @_;
+    delete $self->dbm->{$key};
+}
+
+sub cleanup { Carp::croak "This storage doesn't support cleanup" }
+
+sub finalize {
+    my ($self, ) = @_;
+    if ($self->is_fresh) {
+        $self->insert( $self->session_id, $self->_data );
+    } else {
+        if ($self->is_changed) {
+            $self->update( $self->session_id, $self->_data );
+        }
+    }
+    delete $self->{$_} for keys %$self;
+    bless $self, 'HyCycjk::Session::Finalized';
+}
+{
+    my $required = 0;
+    sub _cookie_class {
+        my $class = shift;
+        unless ($required) {
+            (my $klass = $COOKIE_CLASS) =~ s!::!/!g;
+            $klass .= ".pm";
+            require $klass;
+            $required++;
+        }
+        return $COOKIE_CLASS
+    }
+}
+
+sub cookie_str {
+    my $self = shift;
+    my $cookie = _cookie_class()->new(
+        sub {
+            my %options = (
+                -name   => $self->name,
+                -value  => $self->session_id,
+                -path   => $self->path,
+            );
+            $options{'-domain'} = $self->domain if $self->domain;
+            $options{'-expires'} = $self->expires if $self->expires;
+            $options{'-secure'} = $self->secure if $self->secure;
+            %options;
+        }->()
+    );
+    return $cookie->as_string;
+}
+
+sub get_session_id {
+    my ($self) = @_;
+    my $cookie_header = $ENV{HTTP_COOKIE};
+    return unless $cookie_header;
+
+    my %jar    = _cookie_class()->parse($cookie_header);
+    my $cookie = $jar{$self->name};
+    return $cookie ? $cookie->value : undef;
+}
+
+{
+    my $digest_func = '';
+    sub generate_id {
+        unless ( $digest_func ) {
+            no strict 'refs';
+            require Time::HiRes;
+            eval {
+                require Digest::SHA;
+                $digest_func = *{Digest::SHA::sha256_hex};
+            };
+            if( $@ ){
+                $@ = undef;
+                require Digest::MD5;
+                $digest_func = *{Digest::MD5::md5_hex};
+            }
+        }
+        my ($class, $sid_length) = @_;
+        my $unique = $ENV{UNIQUE_ID} || ( [] . rand() );
+        return substr( $digest_func->( Time::HiRes::gettimeofday() . $unique ), 0, $sid_length );
+    }
+}
+sub keys {
+    my $self = shift;
+    return keys %{ $self->_data };
+}
+
+sub get {
+    my ($self, $key) = @_;
+    $self->_data->{$key};
+}
+
+sub set {
+    my ($self, $key, $val) = @_;
+    $self->is_changed(1);
+    $self->_data->{$key} = $val;
+}
+
+sub remove {
+    my ( $self, $key ) = @_;
+    $self->is_changed(1);
+    delete $self->_data->{$key};
+}
+
+sub as_hashref {
+    my $self = shift;
+    return { %{ $self->_data } }; # shallow copy
+}
+
+sub expire {
+    my $self = shift;
+    $self->delete($self->session_id);
+
+    # XXX tricky bit to unlock
+    delete $self->{$_} for qw(is_fresh is_changed);
+    $self->finalize;
+
+    # rebless to null class
+    bless $self, 'HyCycjk::Session::Expired';
+}
+
+sub regenerate_session_id {
+    my ($self, $delete_old) = @_;
+    $self->_data( { %{ $self->_data } } );
+
+    if ($delete_old) {
+        my $oldsid = $self->session_id;
+        $self->delete($oldsid);
+    }
+    my $session_id = $self->_generate_session_id();
+    $self->session_id( $session_id );
+    $self->is_fresh(1);
+}
+
+package HyCycjk::Session::Finalized;
+sub is_fresh { 0 }
+sub AUTOLOAD { }
+
+package HyCycjk::Session::Expired;
+sub is_fresh { 0 }
+sub AUTOLOAD { }
+
+
 
 1;
 __END__
