@@ -2,15 +2,11 @@ package HyCycjk;
 use strict;
 use warnings;
 use utf8;
-
 require Encode;
 
-#use Data::Dumper;
-
 our $VERSION = '0.01';
-
-# TODO
-# プラグイン機構 pre_request(コントローラー分岐前の処理) 設定値 ファイルDL機能
+our $CURRENT_CLASS = '';
+our %DISPATCH_RULES;
 
 our $MAX_POST_BODY_SIZE = 10000000;
 our $DEBUG              = 1;
@@ -18,8 +14,6 @@ our $NOT_FOUND_CODE     = +{
     headers => +{ Status => 404 },
     body    => 'Not Found',
 };
-our $CURRENT_CLASS = '';
-our %DISPATCH_RULES;
 our $MEDIA_MIMETYPES = +{
     jpg     => 'image/jpeg',
     gif     => 'image/gif',
@@ -29,7 +23,6 @@ our $MEDIA_MIMETYPES = +{
     swf     => 'application/x-shockwave-flash',
     ico     => 'image/vnd.microsoft.icon',
 };
-
 our $STATIC_MIMETYPES = {
     css     => 'text/css',
     js      => 'text/javascript',
@@ -62,6 +55,7 @@ our $TEMPLATE_PARAMS = +{
 our $STATIC_FILE_PATH = '';
 our $CONTROLLER_PATH = '';
 our $DATA_PATH = '';
+our $LOG_PATH = ''
 
 my $CRLF  = "\r\n";
 my $_GET = undef;
@@ -74,18 +68,7 @@ sub import {
     $_POST = undef;
     my $caller = caller;
     $CURRENT_CLASS = $args{current_class} || $caller;
-
-    # pre config
-    if (   exists $args{extends}
-        && exists $args{extends}->{template}
-        && ref( $args{extends}->{template}->{params} ) eq 'HASH' )
-    {
-        while ( my ( $key, $val )
-            = each %{ $args{extends}->{template}->{params} } )
-        {
-            $TEMPLATE_PARAMS->{$key} = $val;
-        }
-    }
+    
     # functions export
     no strict 'refs';
     for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules/)
@@ -95,7 +78,6 @@ sub import {
     for my $meth (qw/get set keys remove as_hashref expire regenerate_session_id session_id/) {
         *{ __PACKAGE__ . '::'. "session_$meth"} = \&{"session_$meth"};
     }
-
     strict->import;
     warnings->import;
     utf8->import;
@@ -195,7 +177,12 @@ sub dispatch {
             $response = $response->(@snippets) if ref $response eq 'CODE';
         }
         else{
-            $action = _camelize( $action );
+            $action = sub { #camelize
+                return $_[0] if $_[0] !~ /_/;
+                my $str = join '', map { ucfirst } split /_/ , shift;
+                lcfirst $str;
+            }->( $action );
+            
             $action =~ s!/!_!g  if( $action );
             #ドットを指定しないと、静的ファイルが見つからなかった場合、indexに飛んでしまう(現状の苦肉の策)
             $action = '' unless $action =~ /^[a-zA-Z0-9_.]*$/;
@@ -210,7 +197,16 @@ sub dispatch {
             else{
                 eval {
                     no strict 'refs';
-                    $response = "$CURRENT_CLASS\::view"->( _uncamelize($action), @snippets );
+                    $response = "$CURRENT_CLASS\::view"->(
+                        sub { #uncamelize
+                            return $_[0] if $_[0] !~ /[_A-Z]/;
+                            my $str = shift;
+                            $str =~ s!_!/!g;
+                            $str =~ s!([A-Z])!'_'.lc($1)!eg;
+                            $str;
+                        }->($action),
+                        @snippets
+                    );
                 };
                 if ( $@ ){
                     die $@ unless $@->{'message'} =~
@@ -739,22 +735,8 @@ sub _get_ready_controller {
     $action;
 }
 
-sub _camelize {
-    return $_[0] if $_[0] !~ /_/;
-    my $str = join '', map { ucfirst } split /_/ , shift;
-    lcfirst $str;
-}
-
 sub dispatch_rules {
-    %DISPATCH_RULES = @_;
-}
-
-sub _uncamelize {
-    return $_[0] if $_[0] !~ /[_A-Z]/;
-    my $str = shift;
-    $str =~ s!_!/!g;
-    $str =~ s!([A-Z])!'_'.lc($1)!eg;
-    $str;
+    %DISPATCH_RULES = (%DISPATCH_RULES, @_);
 }
 
 #sub logging{
