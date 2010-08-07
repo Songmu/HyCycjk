@@ -14,6 +14,14 @@ our $NOT_FOUND_CODE     = +{
     headers => +{ Status => 404 },
     body    => 'Not Found',
 };
+our $STATIC_FILE_PATH = '';
+our $CONTROLLER_PATH = '';
+our $VIEW_PATH = '';
+our $WORK_PATH = './work/';
+our $LOG_PATH = './logs/';
+
+our $APP_CONFIG;
+
 our $MEDIA_MIMETYPES = +{
     jpg     => 'image/jpeg',
     gif     => 'image/gif',
@@ -52,10 +60,6 @@ our $TEMPLATE_PARAMS = +{
     prefix              => '',
     ext                 => 'mt',
 };
-our $STATIC_FILE_PATH = '';
-our $CONTROLLER_PATH = '';
-our $DATA_PATH = '';
-our $LOG_PATH = ''
 
 my $CRLF  = "\r\n";
 my $_GET = undef;
@@ -71,7 +75,7 @@ sub import {
     
     # functions export
     no strict 'refs';
-    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules/)
+    for my $name (qw/ dispatch query post_param query_keys post_keys controller model view redirect filter view_template run is_post_request dispatch_rules logging/)
     {
         *{ $caller . '::' . $name } = \&{$name};
     }
@@ -98,6 +102,18 @@ sub _read_binary {
 }
 
 sub dispatch {
+    my $conf = shift;
+    if ( $conf ){
+        if ( ref $conf->{'hycycjk'} eq 'hash' ){
+            no strict 'refs';
+            while ( my ($key, $val) = each %{$conf->{'hycycjk'}} ){
+                $HyCycjk::{$key} = $val;
+            }
+        }
+        if ( ref $conf->{'application'} eq 'hash' ){
+            $HyCycjk::APP_CONFIG = $conf->{'application'};
+        }
+    }
     my $response;
     my $caller_filename = ( caller(0) )[1];
 
@@ -359,7 +375,6 @@ sub _parse_query{ #store list reference if existing multiple item
     for ( split /&/, $input ){
         my ( $key, $val ) = split /=/, $_;
         $val = url_decode($val) if $val;
-        #$val =~ s/\r//gms; #ActivePerl pack LF(CHR(10)) to CRLF?
         if( !$ret{$key} ){
             $ret{$key} = $val;
         }
@@ -739,12 +754,22 @@ sub dispatch_rules {
     %DISPATCH_RULES = (%DISPATCH_RULES, @_);
 }
 
-#sub logging{
-#    my $msg = shift;
-#    open my $fh,'>>','loglog.log' or return;
-#    binmode $fh;
-#    print $fh $msg."\n";
-#}
+sub logging{
+    my $msg = shift;
+    my ($package, $filename, $line) = caller;
+    my ($sec, $min, $hour, $day, $mon, $year, undef, undef, undef) 
+        = localtime;
+    $mon++;$year+=1900;
+    open my $fh,'>>:utf8',$HyCycjk::LOG_PATH.'app'.sprintf("%04d%02d%02d",$year,$mon,$day).'.log' or return;
+    print $fh
+        sprintf("%04d/%02d/%02d %02d:%02d:%02d ",$year,$mon,$day,$hour,$min,$sec).
+        "$filename($line) ".
+        $msg."\n";
+}
+
+sub app_config {
+    return $HyCycjk::APP_CONFIG->{shift};
+}
 
 { no strict 'refs';
     for my $meth (qw/get set keys remove as_hashref expire regenerate_session_id session_id/) {
@@ -786,7 +811,7 @@ sub new {
     $args{is_changed} ||= 0;
     $args{is_fresh}   ||= 0;
     $args{sid_length} ||= 32;
-    $args{file}       ||= 'data/session';
+    $args{file}       ||= $HyCycjk::WORK_PATH.'session';
 
     $args{permissive} ||= 0;
 
@@ -849,11 +874,10 @@ sub select {
     Storable::thaw $self->dbm->{$key};
 }
 
-sub insert {
+sub update {
     my ( $self, $key, $value ) = @_;
     $self->dbm->{$key} = Storable::freeze $value;
 }
-sub update { shift->insert(@_) }
 
 sub delete {
     my ( $self, $key ) = @_;
@@ -864,12 +888,8 @@ sub cleanup { Carp::croak "This storage doesn't support cleanup" }
 
 sub finalize {
     my ($self, ) = @_;
-    if ($self->is_fresh) {
-        $self->insert( $self->session_id, $self->_data );
-    } else {
-        if ($self->is_changed) {
-            $self->update( $self->session_id, $self->_data );
-        }
+    if ($self->is_fresh || $self->is_changed) {
+        $self->update( $self->session_id, $self->_data );
     }
     delete $self->{$_} for keys %$self;
     bless $self, 'HyCycjk::Session::Finalized';
