@@ -104,13 +104,13 @@ sub _read_binary {
 sub dispatch {
     my $conf = shift;
     if ( $conf ){
-        if ( ref $conf->{'hycycjk'} eq 'hash' ){
+        if ( ref $conf->{'hycycjk'} eq 'HASH' ){
             no strict 'refs';
             while ( my ($key, $val) = each %{$conf->{'hycycjk'}} ){
                 $HyCycjk::{$key} = $val;
             }
         }
-        if ( ref $conf->{'application'} eq 'hash' ){
+        if ( ref $conf->{'application'} eq 'HASH' ){
             $HyCycjk::APP_CONFIG = $conf->{'application'};
         }
     }
