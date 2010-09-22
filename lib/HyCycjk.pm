@@ -529,7 +529,7 @@ sub render {
     my ( undef, $code ) = template_builder($file);
     die 'template file not found (' . $file . ')' . $code unless $code;
     my $result = ( eval $code )->(@_);
-    $result = Encode::decode_utf8($result);
+    $result = Encode::decode_utf8($result) unless Encode::is_utf8($result);
     $result;
 }
 
